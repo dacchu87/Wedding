@@ -476,6 +476,16 @@
   }
 
   /* =====================================================
+     FIREWORKS (drawn above the envelope and the page)
+     ===================================================== */
+  #fireworksCanvas{
+    position:fixed; inset:0;
+    width:100vw; height:100vh;
+    z-index:10001;
+    pointer-events:none;
+  }
+
+  /* =====================================================
      ENVELOPE INTRO
      ===================================================== */
   #envelopeOverlay{
@@ -484,7 +494,7 @@
     background:
       radial-gradient(circle at 50% 30%, rgba(255,248,231,0.25), transparent 60%),
       linear-gradient(160deg, var(--maroon-dark) 0%, var(--maroon) 55%, #5c1420 100%);
-    transition:opacity .8s ease, visibility .8s ease;
+    transition:opacity 1s ease, visibility 1s ease;
   }
   #envelopeOverlay.hidden{
     opacity:0; visibility:hidden; pointer-events:none;
@@ -544,6 +554,7 @@
     transform:translate(-50%,-50%);
     z-index:5;
     display:flex; flex-direction:column; align-items:center;
+    cursor:pointer;
     transition:opacity .5s ease, transform .6s ease;
   }
   .env-flowers{ width:96px; height:auto; margin-bottom:-14px; }
@@ -555,6 +566,24 @@
     font-family:var(--names); font-style:italic; font-weight:600;
     color:var(--maroon-dark); font-size:.95rem; letter-spacing:.02em;
     position:relative; z-index:1;
+    animation:sealPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes sealPulse{
+    0%,100%{ box-shadow:0 6px 14px -4px rgba(0,0,0,0.5), inset 0 -3px 6px rgba(0,0,0,0.25), inset 0 2px 3px rgba(255,255,255,0.5), 0 0 0 0 rgba(234,208,143,0.65); }
+    50%    { box-shadow:0 6px 14px -4px rgba(0,0,0,0.5), inset 0 -3px 6px rgba(0,0,0,0.25), inset 0 2px 3px rgba(255,255,255,0.5), 0 0 0 14px rgba(234,208,143,0); }
+  }
+
+  /* quick flash ring when the seal pops */
+  .seal-flash{
+    position:fixed; z-index:10002; pointer-events:none;
+    width:46px; height:46px; margin:-23px 0 0 -23px;
+    border-radius:50%;
+    background:radial-gradient(circle, rgba(255,250,225,0.95) 0%, rgba(255,214,120,0.7) 40%, rgba(255,214,120,0) 70%);
+    animation:sealFlash .7s ease-out forwards;
+  }
+  @keyframes sealFlash{
+    from{ transform:scale(.4); opacity:1; }
+    to{ transform:scale(9); opacity:0; }
   }
 
   .tap-hint{
@@ -578,7 +607,7 @@
   /* opening state */
   #envelopeOverlay.opening .env-left{ transform:rotateY(-108deg); }
   #envelopeOverlay.opening .env-right{ transform:rotateY(108deg); }
-  #envelopeOverlay.opening .env-seal-wrap{ opacity:0; transform:translate(-50%,-50%) scale(.6); }
+  #envelopeOverlay.opening .env-seal-wrap{ opacity:0; transform:translate(-50%,-50%) scale(.6); pointer-events:none; }
   #envelopeOverlay.opening .tap-hint{ opacity:0; transition:opacity .3s ease; }
 
   #mainContent{
@@ -594,6 +623,9 @@
 </head>
 <body class="locked">
 
+<!-- ============ FIREWORKS LAYER ============ -->
+<canvas id="fireworksCanvas"></canvas>
+
 <!-- ============ ENVELOPE INTRO ============ -->
 <div id="envelopeOverlay">
   <div class="envelope-stage" id="envelopeStage" role="button" tabindex="0" aria-label="Open wedding invitation">
@@ -606,11 +638,11 @@
         <div class="env-corner br"></div>
       </div>
       <div class="env-seam"></div>
-      <div class="env-seal-wrap">
+      <div class="env-seal-wrap" id="sealBtn">
         <div class="wax-seal">D&amp;P</div>
       </div>
     </div>
-    <p class="tap-hint">✦ Tap to open your invitation ✦</p>
+    <p class="tap-hint">✦ Tap the seal to open your invitation ✦</p>
   </div>
 </div>
 
@@ -856,20 +888,252 @@
 </div><!-- /#mainContent -->
 
 <script>
+/* =====================================================
+   FIREWORKS ENGINE
+   Rockets launch from the bottom, climb, then explode
+   into glowing particles that fade under gravity.
+   ===================================================== */
+const Fireworks = (function(){
+  const canvas = document.getElementById("fireworksCanvas");
+  const ctx = canvas.getContext("2d");
+  const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const PALETTES = [
+    ["#FFD76A", "#FFB833", "#FFF3C4"],   // gold
+    ["#FF6B8B", "#FF9EB5", "#FFD0DC"],   // rose
+    ["#FF8A3D", "#FFC15E", "#FFE3A8"],   // saffron
+    ["#7DE3C3", "#B8F5DF", "#FFFFFF"],   // jade
+    ["#C792FF", "#E4C8FF", "#FFFFFF"],   // lavender
+    ["#FF5A4D", "#FFA07A", "#FFE0B2"]    // vermilion
+  ];
+
+  let W = 0, H = 0, dpr = 1;
+  let rockets = [], sparks = [];
+  let running = false, lastTs = 0;
+
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  window.addEventListener("resize", resize);
+
+  function rand(a, b){ return a + Math.random() * (b - a); }
+  function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+
+  /* ---- a rocket that rises and explodes at (tx, ty) ---- */
+  function launch(x, targetX, targetY){
+    const startY = H + 10;
+    const dist = startY - targetY;
+    const duration = rand(0.75, 1.05);           // seconds to reach apex
+    rockets.push({
+      x: x, y: startY,
+      vx: (targetX - x) / duration,
+      vy: -dist / duration,
+      tx: targetX, ty: targetY,
+      life: 0, duration: duration,
+      palette: pick(PALETTES)
+    });
+  }
+
+  /* ---- explosion: ring, sphere or heart-ish burst ---- */
+  function explode(x, y, palette, power){
+    power = power || 1;
+    const count = Math.round(rand(70, 110) * power);
+    const style = Math.random();
+    for (let i = 0; i < count; i++){
+      const angle = (Math.PI * 2 * i) / count + rand(-0.05, 0.05);
+      let speed;
+      if (style < 0.35){ speed = rand(150, 190) * power; }          // tight ring
+      else { speed = rand(40, 230) * power; }                       // full sphere
+      sparks.push({
+        x: x, y: y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        decay: rand(0.35, 0.65),
+        size: rand(1.4, 2.8),
+        color: pick(palette),
+        twinkle: Math.random() < 0.3
+      });
+    }
+    // bright core flash
+    sparks.push({ x: x, y: y, vx: 0, vy: 0, life: 1, decay: 3.2, size: 26 * power, color: "#FFF6D8", flash: true });
+  }
+
+  function step(ts){
+    const dt = Math.min((ts - lastTs) / 1000, 0.05) || 0.016;
+    lastTs = ts;
+
+    // fade previous frame to leave soft trails
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "lighter";
+
+    // rockets
+    for (let i = rockets.length - 1; i >= 0; i--){
+      const r = rockets[i];
+      r.life += dt;
+      r.x += r.vx * dt;
+      r.y += r.vy * dt;
+      // glowing head + trail sparks
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, 2.6, 0, Math.PI * 2);
+      ctx.fillStyle = "#FFF3C4";
+      ctx.fill();
+      sparks.push({
+        x: r.x + rand(-1, 1), y: r.y, vx: rand(-14, 14), vy: rand(10, 40),
+        life: 1, decay: rand(1.6, 2.6), size: rand(1, 1.8), color: "#FFD27A"
+      });
+      if (r.life >= r.duration){
+        explode(r.tx, r.ty, r.palette, rand(0.9, 1.25));
+        rockets.splice(i, 1);
+      }
+    }
+
+    // sparks
+    for (let i = sparks.length - 1; i >= 0; i--){
+      const s = sparks[i];
+      s.life -= s.decay * dt;
+      if (s.life <= 0){ sparks.splice(i, 1); continue; }
+      if (!s.flash){
+        s.vx *= 0.985;
+        s.vy = s.vy * 0.985 + 90 * dt;     // gravity
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+      }
+      let alpha = Math.max(s.life, 0);
+      if (s.twinkle && Math.random() < 0.35) alpha *= 0.3;
+
+      if (s.flash){
+        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.size);
+        g.addColorStop(0, "rgba(255,246,216," + alpha + ")");
+        g.addColorStop(1, "rgba(255,200,100,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = s.color;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = s.color;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.size * (0.6 + 0.4 * s.life), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    if (rockets.length || sparks.length || pending > 0){
+      requestAnimationFrame(step);
+    } else {
+      running = false;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.clearRect(0, 0, W, H);
+    }
+  }
+
+  let pending = 0;   // scheduled-but-not-yet-fired launches keep the loop alive
+
+  function start(){
+    if (running) return;
+    running = true;
+    lastTs = performance.now();
+    requestAnimationFrame(step);
+  }
+
+  function schedule(fn, delay){
+    pending++;
+    setTimeout(function(){ pending--; fn(); }, delay);
+  }
+
+  /* ---- public: the big show, centred on the seal ---- */
+  function celebrate(originX, originY){
+    if (reduceMotion) return;
+    start();
+
+    // 1) instant BLAST at the seal
+    explode(originX, originY, PALETTES[0], 1.5);
+    explode(originX, originY, PALETTES[1], 1.0);
+
+    // 2) rockets from the bottom, staggered, fanning across the screen
+    const salvo = [
+      { d: 150,  x: 0.50, y: 0.22 },
+      { d: 380,  x: 0.22, y: 0.30 },
+      { d: 520,  x: 0.78, y: 0.28 },
+      { d: 900,  x: 0.38, y: 0.18 },
+      { d: 1050, x: 0.64, y: 0.20 },
+      { d: 1450, x: 0.12, y: 0.38 },
+      { d: 1550, x: 0.88, y: 0.36 },
+      { d: 1950, x: 0.50, y: 0.15 },
+      { d: 2200, x: 0.28, y: 0.26 },
+      { d: 2350, x: 0.72, y: 0.24 },
+      { d: 2800, x: 0.50, y: 0.28 }
+    ];
+    salvo.forEach(function(s){
+      schedule(function(){
+        const startX = W * rand(0.3, 0.7);
+        launch(startX, W * s.x + rand(-30, 30), H * s.y + rand(-20, 20));
+        start();
+      }, s.d);
+    });
+
+    // 3) grand finale: a wave of bursts across the sky
+    schedule(function(){
+      for (let i = 0; i < 6; i++){
+        (function(i){
+          schedule(function(){
+            explode(W * rand(0.1, 0.9), H * rand(0.12, 0.45), pick(PALETTES), rand(0.9, 1.2));
+            start();
+          }, i * 120);
+        })(i);
+      }
+    }, 3300);
+  }
+
+  return { celebrate: celebrate };
+})();
+
 /* ---------------- Envelope Intro ---------------- */
 (function(){
   const overlay = document.getElementById("envelopeOverlay");
   const stage = document.getElementById("envelopeStage");
+  const seal = document.getElementById("sealBtn");
   const main = document.getElementById("mainContent");
 
   function openEnvelope(){
     if (overlay.classList.contains("opening")) return;
+
+    // blast fireworks from the seal's position
+    const r = seal.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+
+    const flash = document.createElement("div");
+    flash.className = "seal-flash";
+    flash.style.left = cx + "px";
+    flash.style.top = cy + "px";
+    document.body.appendChild(flash);
+    setTimeout(function(){ flash.remove(); }, 800);
+
+    Fireworks.celebrate(cx, cy);
+
+    // envelope opens right as the blast goes off…
     overlay.classList.add("opening");
+
+    // …but stays around a little so the fireworks play over it
     setTimeout(function(){
       overlay.classList.add("hidden");
       document.body.classList.remove("locked");
       main.classList.add("revealed");
-    }, 950);
+    }, 2200);
   }
 
   stage.addEventListener("click", openEnvelope);
