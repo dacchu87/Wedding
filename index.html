@@ -55,9 +55,6 @@
   }
   body.locked{ overflow:hidden; height:100vh; }
 
-  @media (prefers-reduced-motion: reduce){
-    *{animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important;}
-  }
 
   a{color:inherit;}
   img,svg{display:block; max-width:100%;}
@@ -101,10 +98,17 @@
   .petal{
     position:fixed; top:-30px; z-index:2; pointer-events:none;
     border-radius:60% 0 60% 0;
+    -webkit-animation:petalfall linear forwards;
     animation:petalfall linear forwards;
+    will-change:transform;
+  }
+  @-webkit-keyframes petalfall{
+    from{ -webkit-transform:translate3d(0,0,0) rotate(0deg); }
+    to{ -webkit-transform:translate3d(var(--drift,40px),110vh,0) rotate(360deg); opacity:.15; }
   }
   @keyframes petalfall{
-    to{ transform:translateY(110vh) translateX(var(--drift,40px)) rotate(360deg); opacity:.15; }
+    from{ transform:translate3d(0,0,0) rotate(0deg); }
+    to{ transform:translate3d(var(--drift,40px),110vh,0) rotate(360deg); opacity:.15; }
   }
 
   /* ---------- HERO ---------- */
@@ -142,6 +146,7 @@
   .save-date-chip{
     display:inline-flex; gap:10px; align-items:center;
     background:rgba(255,255,255,0.78);
+    -webkit-backdrop-filter:blur(8px);
     backdrop-filter:blur(8px);
     border:1px solid rgba(201,162,39,0.6);
     padding:14px 24px;
@@ -480,8 +485,9 @@
      ===================================================== */
   #fireworksCanvas{
     position:fixed; inset:0;
-    width:100vw; height:100vh;
+    width:100%; height:100%;
     z-index:10001;
+    -webkit-transform:translateZ(0); transform:translateZ(0);
     pointer-events:none;
     display:none;
   }
@@ -898,7 +904,6 @@
 const Fireworks = (function(){
   const canvas = document.getElementById("fireworksCanvas");
   const ctx = canvas.getContext("2d");
-  const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const PALETTES = [
     ["#FFD76A", "#FFB833", "#FFF3C4"],
@@ -1041,7 +1046,6 @@ const Fireworks = (function(){
 
   /* big show centred on the seal — total length about 1.8s */
   function celebrate(originX, originY){
-    if (reduceMotion) return;
     stopped = false;
     canvas.style.transition = "none";
     canvas.style.opacity = "1";
@@ -1139,7 +1143,9 @@ const Fireworks = (function(){
     }
   }
 
+  stage.style.cursor = "pointer";
   stage.addEventListener("click", openEnvelope);
+  stage.addEventListener("touchend", function(e){ e.preventDefault(); openEnvelope(); }, { passive: false });
   stage.addEventListener("keydown", function(e){
     if (e.key === "Enter" || e.key === " "){ e.preventDefault(); openEnvelope(); }
   });
@@ -1164,7 +1170,7 @@ const Fireworks = (function(){
     setTimeout(function(){ p.remove(); }, 17000);
   }
   for (let i = 0; i < 6; i++){ setTimeout(spawnPetal, i * 900); }
-  setInterval(spawnPetal, 1600);
+  setInterval(function(){ if (!document.hidden) spawnPetal(); }, 1600);
 
   // Magical Fireflies/Dust for the Mesmerizing Background
   const dustContainer = document.getElementById("scenic-dust");
